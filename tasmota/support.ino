@@ -156,7 +156,7 @@ float CharToFloat(const char *str)
 
   signed char sign = 1;
   if (*pt == '-') { sign = -1; }
-  if (*pt == '-' || *pt=='+') { pt++; }            // Skip any sign
+  if (*pt == '-' || *pt == '+') { pt++; }          // Skip any sign
 
   float left = 0;
   if (*pt != '.') {
@@ -167,6 +167,9 @@ float CharToFloat(const char *str)
   float right = 0;
   if (*pt == '.') {
     pt++;
+    uint32_t max_decimals = 0;
+    while ((max_decimals < 8) && isdigit(pt[max_decimals])) { max_decimals++; }
+    pt[max_decimals] = '\0';                       // Limit decimals to float max of 8
     right = atoi(pt);                              // Decimal part
     while (isdigit(*pt)) {
       pt++;
@@ -687,9 +690,9 @@ void ResetGlobalValues(void)
 {
   if ((uptime - global_update) > GLOBAL_VALUES_VALID) {  // Reset after 5 minutes
     global_update = 0;
-    global_temperature = 9999;
-    global_humidity = 0;
-    global_pressure = 0;
+    global_temperature = NAN;
+    global_humidity = 0.0f;
+    global_pressure = 0.0f;
   }
 }
 
@@ -997,7 +1000,7 @@ char* ResponseGetTime(uint32_t format, char* time_str)
     snprintf_P(time_str, TIMESZ, PSTR("{\"" D_JSON_TIME "\":%u"), UtcTime());
     break;
   case 3:
-    snprintf_P(time_str, TIMESZ, PSTR("{\"" D_JSON_TIME "\":\"%s.%03d\""), GetDateAndTime(DT_LOCAL).c_str(), RtcMillis());
+    snprintf_P(time_str, TIMESZ, PSTR("{\"" D_JSON_TIME "\":\"%s\""), GetDateAndTime(DT_LOCAL_MILLIS).c_str());
     break;
   default:
     snprintf_P(time_str, TIMESZ, PSTR("{\"" D_JSON_TIME "\":\"%s\""), GetDateAndTime(DT_LOCAL).c_str());
@@ -1096,9 +1099,17 @@ uint32_t Pin(uint32_t gpio, uint32_t index) {
   return 99;                 // No pin used for gpio
 }
 
-boolean PinUsed(uint32_t gpio, uint32_t index = 0);
-boolean PinUsed(uint32_t gpio, uint32_t index) {
+bool PinUsed(uint32_t gpio, uint32_t index = 0);
+bool PinUsed(uint32_t gpio, uint32_t index) {
   return (Pin(gpio, index) < 99);
+}
+
+uint32_t GetPin(uint32_t lpin) {
+  if (lpin < ARRAY_SIZE(gpio_pin)) {
+    return gpio_pin[lpin];
+  } else {
+    return GPIO_NONE;
+  }
 }
 
 void SetPin(uint32_t lpin, uint32_t gpio) {
@@ -1254,11 +1265,7 @@ uint32_t ValidPin(uint32_t pin, uint32_t gpio)
 
 bool ValidGPIO(uint32_t pin, uint32_t gpio)
 {
-#ifdef ESP8266
-  return (GPIO_USER == ValidPin(pin, gpio));  // Only allow GPIO_USER pins
-#else  // ESP32
-  return (GPIO_USER == ValidPin(pin, gpio >> 5));  // Only allow GPIO_USER pins
-#endif  // ESP8266 - ESP32
+  return (GPIO_USER == ValidPin(pin, BGPIO(gpio)));  // Only allow GPIO_USER pins
 }
 
 #ifdef ESP8266
@@ -1356,7 +1363,15 @@ bool JsonTemplate(const char* dataBuf)
   }
   if (obj[D_JSON_GPIO].success()) {
     for (uint32_t i = 0; i < ARRAY_SIZE(Settings.user_template.gp.io); i++) {
+#ifdef ESP8266
       Settings.user_template.gp.io[i] = obj[D_JSON_GPIO][i] | 0;
+#else  // ESP32
+      uint16_t gpio = obj[D_JSON_GPIO][i] | 0;
+      if (gpio == (AGPIO(GPIO_NONE) +1)) {
+        gpio = AGPIO(GPIO_USER);
+      }
+      Settings.user_template.gp.io[i] = gpio;
+#endif
     }
   }
   if (obj[D_JSON_FLAG].success()) {
@@ -1375,7 +1390,15 @@ void TemplateJson(void)
 {
   Response_P(PSTR("{\"" D_JSON_NAME "\":\"%s\",\"" D_JSON_GPIO "\":["), SettingsText(SET_TEMPLATE_NAME));
   for (uint32_t i = 0; i < ARRAY_SIZE(Settings.user_template.gp.io); i++) {
+#ifdef ESP8266
     ResponseAppend_P(PSTR("%s%d"), (i>0)?",":"", Settings.user_template.gp.io[i]);
+#else  // ESP32
+    uint16_t gpio = Settings.user_template.gp.io[i];
+    if (gpio == AGPIO(GPIO_USER)) {
+      gpio = AGPIO(GPIO_NONE) +1;
+    }
+    ResponseAppend_P(PSTR("%s%d"), (i>0)?",":"", gpio);
+#endif
   }
   ResponseAppend_P(PSTR("],\"" D_JSON_FLAG "\":%d,\"" D_JSON_BASE "\":%d}"), Settings.user_template.flag, Settings.user_template_base +1);
 }
@@ -1459,6 +1482,7 @@ bool I2cValidRead(uint8_t addr, uint8_t reg, uint8_t size)
     }
     retry--;
   }
+  if (!retry) Wire.endTransmission();
   return status;
 }
 
@@ -1600,8 +1624,8 @@ void I2cScan(char *devs, unsigned int devs_len)
   // Return error codes defined in twi.h and core_esp8266_si2c.c
   // I2C_OK                      0
   // I2C_SCL_HELD_LOW            1 = SCL held low by another device, no procedure available to recover
-  // I2C_SCL_HELD_LOW_AFTER_READ 2 = I2C bus error. SCL held low beyond slave clock stretch time
-  // I2C_SDA_HELD_LOW            3 = I2C bus error. SDA line held low by slave/another_master after n bits
+  // I2C_SCL_HELD_LOW_AFTER_READ 2 = I2C bus error. SCL held low beyond client clock stretch time
+  // I2C_SDA_HELD_LOW            3 = I2C bus error. SDA line held low by client/another_master after n bits
   // I2C_SDA_HELD_LOW_AFTER_INIT 4 = line busy. SDA again held low by another device. 2nd master?
 
   uint8_t error = 0;
@@ -1737,7 +1761,7 @@ void Syslog(void)
   }
   if (PortUdp.beginPacket(syslog_host_addr, Settings.syslog_port)) {
     char syslog_preamble[64];  // Hostname + Id
-    snprintf_P(syslog_preamble, sizeof(syslog_preamble), PSTR("%s ESP-"), my_hostname);
+    snprintf_P(syslog_preamble, sizeof(syslog_preamble), PSTR("%s ESP-"), NetworkHostname());
     memmove(log_data + strlen(syslog_preamble), log_data, sizeof(log_data) - strlen(syslog_preamble));
     log_data[sizeof(log_data) -1] = '\0';
     memcpy(log_data, syslog_preamble, strlen(syslog_preamble));
@@ -1784,7 +1808,7 @@ void AddLog(uint32_t loglevel)
       !global_state.mqtt_down &&
       (loglevel <= Settings.mqttlog_level)) { MqttPublishLogging(mxtime); }
 
-  if (!global_state.wifi_down &&
+  if (!global_state.network_down &&
       (loglevel <= syslog_level)) { Syslog(); }
 
   prepped_loglevel = 0;
@@ -1881,7 +1905,7 @@ void AddLogBufferSize(uint32_t loglevel, uint8_t *buffer, uint32_t count, uint32
  * Uncompress static PROGMEM strings
 \*********************************************************************************************/
 
-#if defined(USE_RULES_COMPRESSION) || defined(USE_SCRIPT_COMPRESSION)
+#ifdef USE_UNISHOX_COMPRESSION
 
 #include <unishox.h>
 
@@ -1907,4 +1931,4 @@ String Decompress(const char * compressed, size_t uncompressed_size) {
   return content;
 }
 
-#endif // defined(USE_RULES_COMPRESSION) || defined(USE_SCRIPT_COMPRESSION)
+#endif // USE_UNISHOX_COMPRESSION

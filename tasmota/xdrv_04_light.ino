@@ -650,7 +650,7 @@ class LightStateClass {
           _ww = changeUIntScale(w, 0, max, 0, 255);
           _wc = changeUIntScale(c, 0, max, 0, 255);
         }
-        _ct = changeUIntScale(w, 0, sum, _ct_min_range, _ct_max_range);
+        _ct = changeUIntScale(w, 0, sum, CT_MIN, CT_MAX);
         addCTMode();   // activate CT mode if needed
         if (_color_mode & LCM_CT) { _briCT = free_range ? max : (sum > 255 ? 255 : sum); }
       }
@@ -1429,6 +1429,10 @@ void LightGetHSB(uint16_t *hue, uint8_t *sat, uint8_t *bri) {
   light_state.getHSB(hue, sat, bri);
 }
 
+void LightGetXY(float *X, float *Y) {
+  light_state.getXY(X, Y);
+}
+
 void LightHsToRgb(uint16_t hue, uint8_t sat, uint8_t *r_r, uint8_t *r_g, uint8_t *r_b) {
   light_state.HsToRgb(hue, sat, r_r, r_g, r_b);
 }
@@ -1551,10 +1555,10 @@ void LightState(uint8_t append)
   if (!Light.pwm_multi_channels) {
     if (unlinked) {
       // RGB and W are unlinked, we display the second Power/Dimmer
-      ResponseAppend_P(PSTR("\"" D_RSLT_POWER "%d\":\"%s\",\"" D_CMND_DIMMER "%d\":%d"
-                           ",\"" D_RSLT_POWER "%d\":\"%s\",\"" D_CMND_DIMMER "%d\":%d"),
-                            Light.device, GetStateText(Light.power & 1), Light.device, light_state.getDimmer(1),
-                            Light.device + 1, GetStateText(Light.power & 2 ? 1 : 0), Light.device + 1, light_state.getDimmer(2));
+      ResponseAppend_P(PSTR("\"" D_RSLT_POWER "%d\":\"%s\",\"" D_CMND_DIMMER "1\":%d"
+                           ",\"" D_RSLT_POWER "%d\":\"%s\",\"" D_CMND_DIMMER "2\":%d"),
+                            Light.device, GetStateText(Light.power & 1), light_state.getDimmer(1),
+                            Light.device + 1, GetStateText(Light.power & 2 ? 1 : 0), light_state.getDimmer(2));
     } else {
       GetPowerDevice(scommand, Light.device, sizeof(scommand), Settings.flag.device_index_enable);  // SetOption26 - Switch between POWER or POWER1
       ResponseAppend_P(PSTR("\"%s\":\"%s\",\"" D_CMND_DIMMER "\":%d"), scommand, GetStateText(Light.power & 1),

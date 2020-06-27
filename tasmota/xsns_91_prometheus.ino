@@ -37,7 +37,9 @@ void HandleMetrics(void)
 
   char parameter[FLOATSZ];
 
-  if (global_temperature != 9999) {
+  WSContentSend_P(PSTR("# TYPE tasmota_uptime_seconds gauge\ntasmota_uptime_seconds %d\n"), uptime);
+
+  if (!isnan(global_temperature)) {
     dtostrfd(global_temperature, Settings.flag2.temperature_resolution, parameter);
     WSContentSend_P(PSTR("# TYPE global_temperature gauge\nglobal_temperature %s\n"), parameter);
   }
